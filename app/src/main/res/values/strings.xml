@@ -1,3 +1,11 @@
 <resources>
     <string name="app_name">My Circles</string>
+    <string name="content_authority">chris.meyering.mycircles.data.provider</string>
+    <string name="red_eq">Red:</string>
+    <string name="green_eq">Green:</string>
+    <string name="blue_eq">Blue:</string>
+    <string name="test_num">1234.0</string>
+    <string name="x_eq">x:</string>
+    <string name="y_eq">y:</string>
+    <string name="radius_eq">r:</string>
 </resources>
