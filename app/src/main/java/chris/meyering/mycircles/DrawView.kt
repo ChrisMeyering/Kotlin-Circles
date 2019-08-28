@@ -1,110 +1,86 @@
 package chris.meyering.mycircles
 
 import android.content.Context
+import android.database.Cursor
 import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.os.Build
-import android.os.Parcel
-import android.os.Parcelable
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
-import chris.meyering.mycircles.objects.Circle
+import androidx.loader.app.LoaderManager
+import chris.meyering.mycircles.objects.CircleHandler
 import chris.meyering.mycircles.objects.Point
-import java.util.*
-import kotlin.math.max
-import kotlin.math.min
 
 class DrawView @JvmOverloads constructor(context: Context, attrs: AttributeSet? = null, defStyle: Int=0):
     View(context, attrs, defStyle) {
 
-    companion object {
-        private const val MIN_RADIUS = 30.0f
-        private const val MAX_RADIUS = 300.0f
-    }
 
-    private val rand : Random = Random()
-    private var circleColor : Int = getRandColor()
-    var circles : MutableList<Circle> = mutableListOf()
-    private var tempCircle : Circle? = null
-    private val circlePaint : Paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var radius: Float = MIN_RADIUS
+    val ch = CircleHandler(context)
 
-
-    private var selectedCircleIdx: Int = -1
     private var offset: Point = Point(0f,0f)
 
     private val scaleListener = object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
-            radius *= detector.scaleFactor
-            radius = max(MIN_RADIUS, min(radius, MAX_RADIUS))
-            tempCircle?.r = radius
+            ch.scale(detector.scaleFactor)
             return true
         }
     }
 
     private val scaleDetector = ScaleGestureDetector(context, scaleListener)
 
-    init {
-        circlePaint.style = Paint.Style.FILL
-        circlePaint.isAntiAlias = true
+    /*******************************************
+     *               FAB ACTIONS
+     *******************************************/
 
+    fun undo(): Boolean {
+
+        val b = ch.undo()
+        invalidate()
+        return b
     }
 
-    private fun getRandColor(): Int {
-        return Color.rgb(getRand255(), getRand255(), getRand255())
+    fun redo(): Boolean {
+        val b = ch.redo()
+        invalidate()
+        return b
     }
 
-    private fun getRand255(): Int {
-        return rand.nextInt(256)
+    fun clear(): Boolean {
+        val b = ch.clear()
+        invalidate()
+        return b
     }
 
-    private fun addCircle(circle: Circle) {
-        circles.add(circle)
-        tempCircle = null
+    fun move(p: Point) {
+        ch.move(p)
         invalidate()
     }
 
-    private fun addTempCircle(circle: Circle) {
-        tempCircle = circle
-        invalidate()
+    fun setHistoryLoaderManager(loaderManager: LoaderManager) {
+        ch.setHistoryLoaderManager(loaderManager)
+    }
+    fun setHistoryCursor(cursor: Cursor) {
+        ch.chm.historyEventCursor = cursor
     }
 
-    //
-    private fun moveCircle(p: Point) {
-        tempCircle?.moveTo(p + offset)
-        invalidate()
-    }
-//    fun clearCircles() {
-//        circles.clear()
-//        invalidate()
-//    }
-//
-//    private fun halfAlpha(@ColorInt c: Int) : Int {
-//        return ColorUtils.setAlphaComponent(c, 130)
-//    }
-
-    private fun intersects(p: Point): Boolean {
-        for (i in circles.count() -1 downTo  0) {
-            if (circles[i].intersects(p)) {
-                selectedCircleIdx = i
-                return true
-            }
-        }
-        return false
-    }
+    /*******************************************
+     *                 ACTIONS                 *
+     *******************************************/
 
     private fun onFingerDown(p: Point) {
-        if (intersects(p)) {
-            val selCirc = circles[selectedCircleIdx]
-            offset = selCirc.p!! - p
-            circles[selectedCircleIdx].isVisible = false
-            addTempCircle(Circle(p + offset, selCirc.r, selCirc.color))
+        if (ch.intersects(p)) {
+            offset = ch.selectedCircleCenter() - p
+            ch.setTempCircle(p + offset)
         } else {
-            addTempCircle(Circle(p, radius, circleColor))
+            ch.setTempCircle(p)
         }
+        invalidate()
+    }
+
+    private fun onFingerUp(p: Point) {
+        ch.commitTempCircle(p)
+        offset = Point()
+        invalidate()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -116,25 +92,11 @@ class DrawView @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
             MotionEvent.ACTION_DOWN ->
                 onFingerDown(p)
             MotionEvent.ACTION_MOVE ->
-                moveCircle(p)
-            MotionEvent.ACTION_UP -> {
-                if (selectedCircleIdx == -1) {
-                    addCircle(Circle(p, radius, circleColor))
-                    circleColor = getRandColor()
-                } else {
-                    circles[selectedCircleIdx] = tempCircle!!
-                    circles[selectedCircleIdx].moveTo(p + offset)
-                    circles[selectedCircleIdx].isVisible = true
-                    selectedCircleIdx = -1
-                    offset = Point()
-                    tempCircle = null
-                    invalidate()
-                }
-            }
-
+                move(p + offset)
+            MotionEvent.ACTION_UP ->
+                onFingerUp(p + offset)
         }
         return true
-
     }
 
 
@@ -146,46 +108,62 @@ class DrawView @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
     override fun onDraw(canvas: Canvas?) {
         super.onDraw(canvas)
         canvas?.apply {
-            for (circle in circles) {
+            var paint = ch.circlePaint
+            for (circle in ch.circles) {
                 if (circle.isVisible) {
-                    circlePaint.color = circle.color
-                    canvas.drawCircle(circle.p!!.x, circle.p!!.y, circle.r, circlePaint)
+                    paint.color = circle.color
+                    canvas.drawCircle(circle.p.x, circle.p.y, circle.r, paint)
                 }
             }
-            if (tempCircle != null) {
-                circlePaint.color = tempCircle!!.color
-                circlePaint.alpha = 130
-                canvas.drawCircle(tempCircle!!.p!!.x, tempCircle!!.p!!.y, tempCircle!!.r, circlePaint)
+            if (ch.tempCircle != null) {
+                paint = ch.tempCirclePaint
+                canvas.drawCircle(ch.tempCircle!!.p.x, ch.tempCircle!!.p.y, ch.tempCircle!!.r, paint)
 
             }
+
         }
     }
 
-    override fun onRestoreInstanceState(state: Parcelable?) {
-        if (state is SavedState) {
-            super.onRestoreInstanceState(state.superState)
-            circles = state.circles
-        } else {
-            super.onRestoreInstanceState(state)
-        }
+
+    /***********************************
+     * Data persistence                *
+     ***********************************/
+
+//    override fun onRestoreInstanceState(state: Parcelable?) {
+//        if (state is SavedState) {
+//            super.onRestoreInstanceState(state.superState)
+//            ch.circles = state.circles
+//        } else {
+//            super.onRestoreInstanceState(state)
+//        }
+//    }
+//
+//    override fun onSaveInstanceState(): Parcelable? {
+//        val  savedState = SavedState(super.onSaveInstanceState())
+//        savedState.circles = ch.circles
+//        return savedState
+//    }
+
+    fun initCircles(cursor: Cursor) {
+        ch.initCircles(cursor)
     }
 
-    override fun onSaveInstanceState(): Parcelable? {
-        val  savedState: SavedState = SavedState(super.onSaveInstanceState())
-        savedState.circles = circles
-        return savedState
+    fun save() {
+        ch.save()
+
     }
 
-
-
-
+//    fun load() {
+//        ch.loadCircles()
+//    }
+/*
     internal class SavedState : BaseSavedState {
         var circles: MutableList<Circle> = mutableListOf()
 
         constructor(superState: Parcelable?) : super(superState)
 
         constructor(source: Parcel) : super(source) {
-            val obj = source.readParcelableArray(Circle::class.java.classLoader)
+            circles = source.readParcelableArray(Circle::class.java.classLoader) as MutableList<Circle>
         }
 
 
@@ -207,5 +185,5 @@ class DrawView @JvmOverloads constructor(context: Context, attrs: AttributeSet? 
             }
 
         }
-    }
+    }*/
 }
